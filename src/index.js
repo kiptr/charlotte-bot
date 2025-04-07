@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionsBitField, MessageFlags } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionsBitField, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { config } from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
@@ -26,6 +26,17 @@ const client = new Client({
 
 // Array of valid activity types
 const VALID_TYPES = ['Our Turn', 'Opps Turn', 'EBK', 'No Beef'];
+
+// Store the current page for each activity type
+const activityPages = {
+  'Our Turn': 0,
+  'Opps Turn': 0,
+  'EBK': 0,
+  'No Beef': 0
+};
+
+// Activities per page
+const ACTIVITIES_PER_PAGE = 25;
 
 // Function to load activities from file
 async function loadActivities() {
@@ -98,12 +109,24 @@ async function updateActivitiesMessage() {
     
     // Create embeds for each type
     const embeds = [];
+    const components = [];
     
     for (const type of VALID_TYPES) {
       const typeActivities = groupedActivities[type];
       
       // Sort activities by creation date (oldest first instead of newest first)
       typeActivities.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+      
+      // Calculate pagination
+      const totalPages = Math.ceil(typeActivities.length / ACTIVITIES_PER_PAGE);
+      const currentPage = activityPages[type];
+      // Ensure current page is valid
+      activityPages[type] = Math.min(Math.max(0, currentPage), Math.max(0, totalPages - 1));
+      
+      // Calculate the range for the current page
+      const startIdx = activityPages[type] * ACTIVITIES_PER_PAGE;
+      const endIdx = Math.min(startIdx + ACTIVITIES_PER_PAGE, typeActivities.length);
+      const displayActivities = typeActivities.slice(startIdx, endIdx);
       
       // Create embed for this type
       const embed = new EmbedBuilder()
@@ -114,28 +137,55 @@ async function updateActivitiesMessage() {
       if (typeActivities.length === 0) {
         embed.setDescription('No activities in this category.');
       } else {
-        // Add activity fields (limit to 10 per type to avoid embed limits)
-        const displayActivities = typeActivities.slice(0, 10);
-        
-        // Instead of using fields, add each activity as a line in the description
+        // Create activity lines for the current page
         const activityLines = displayActivities.map((activity, index) => {
           const date = new Date(activity.createdAt);
           // Format date as dd/mm/yyyy
           const formattedDate = `${('0' + date.getDate()).slice(-2)}/${('0' + (date.getMonth() + 1)).slice(-2)}/${date.getFullYear()}`;
           // Only show brackets with description if a description exists
           const descriptionText = activity.description ? ` [${activity.description}]` : '';
-          return `${index + 1}. **${activity.gangName}**${descriptionText} (${formattedDate})`;
+          // Adjust index to show the actual number in the full list
+          return `${startIdx + index + 1}. **${activity.gangName}**${descriptionText} (${formattedDate})`;
         });
         
         // Join without extra blank line
         embed.setDescription(activityLines.join('\n') || 'No activities in this category.');
         
-        if (typeActivities.length > 10) {
-          embed.setFooter({ text: `Showing 10/${typeActivities.length} activities` });
+        if (totalPages > 1) {
+          embed.setFooter({ text: `Page ${activityPages[type] + 1}/${totalPages} • Total: ${typeActivities.length} activities` });
         }
       }
       
       embeds.push(embed);
+      
+      // Create pagination buttons for this type
+      if (typeActivities.length > ACTIVITIES_PER_PAGE) {
+        const row = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(`first_${type}`)
+              .setLabel('⏮️ First')
+              .setStyle(ButtonStyle.Secondary)
+              .setDisabled(activityPages[type] === 0),
+            new ButtonBuilder()
+              .setCustomId(`prev_${type}`)
+              .setLabel('◀️ Previous')
+              .setStyle(ButtonStyle.Primary)
+              .setDisabled(activityPages[type] === 0),
+            new ButtonBuilder()
+              .setCustomId(`next_${type}`)
+              .setLabel('Next ▶️')
+              .setStyle(ButtonStyle.Primary)
+              .setDisabled(activityPages[type] >= totalPages - 1),
+            new ButtonBuilder()
+              .setCustomId(`last_${type}`)
+              .setLabel('Last ⏭️')
+              .setStyle(ButtonStyle.Secondary)
+              .setDisabled(activityPages[type] >= totalPages - 1)
+          );
+        
+        components.push(row);
+      }
     }
     
     // Get the channel
@@ -150,17 +200,17 @@ async function updateActivitiesMessage() {
     if (config.channels.activity.messageId) {
       try {
         const message = await channel.messages.fetch(config.channels.activity.messageId);
-        await message.edit({ embeds: embeds });
+        await message.edit({ embeds: embeds, components: components });
         console.log('Activities message updated successfully.');
       } catch (error) {
         console.error('Could not find the activities message. Creating a new one.');
-        const message = await channel.send({ embeds: embeds });
+        const message = await channel.send({ embeds: embeds, components: components });
         config.channels.activity.messageId = message.id;
         await saveConfig(config);
         console.log('New activities message created.');
       }
     } else {
-      const message = await channel.send({ embeds: embeds });
+      const message = await channel.send({ embeds: embeds, components: components });
       config.channels.activity.messageId = message.id;
       await saveConfig(config);
       console.log('Initial activities message created.');
@@ -337,6 +387,64 @@ client.on('interactionCreate', async interaction => {
       );
     } catch (error) {
       console.error('Error handling autocomplete interaction:', error);
+    }
+  }
+});
+
+// Handle button interactions for pagination
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isButton()) return;
+  
+  try {
+    const [action, type] = interaction.customId.split('_');
+    
+    // Make sure it's a valid type
+    if (!VALID_TYPES.includes(type)) return;
+    
+    // Determine the new page based on the button pressed
+    const activities = await loadActivities();
+    const typeActivities = activities.filter(a => a.type === type);
+    const totalPages = Math.ceil(typeActivities.length / ACTIVITIES_PER_PAGE);
+    
+    switch (action) {
+      case 'first':
+        activityPages[type] = 0;
+        break;
+      case 'prev':
+        activityPages[type] = Math.max(0, activityPages[type] - 1);
+        break;
+      case 'next':
+        activityPages[type] = Math.min(totalPages - 1, activityPages[type] + 1);
+        break;
+      case 'last':
+        activityPages[type] = Math.max(0, totalPages - 1);
+        break;
+      default:
+        return;
+    }
+    
+    // Acknowledge the interaction
+    await interaction.deferUpdate();
+    
+    // Update the activities message with the new page
+    await updateActivitiesMessage();
+  } catch (error) {
+    console.error('Error handling button interaction:', error);
+    try {
+      await interaction.reply({
+        content: 'There was an error while handling the pagination!',
+        flags: MessageFlags.Ephemeral
+      });
+    } catch (e) {
+      // If replying fails, try to update the interaction
+      try {
+        await interaction.update({
+          content: 'There was an error while handling the pagination!',
+          components: []
+        });
+      } catch (innerError) {
+        console.error('Failed to respond to button interaction:', innerError);
+      }
     }
   }
 });
