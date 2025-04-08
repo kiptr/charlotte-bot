@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionsBitField, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionsBitField, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { config } from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
@@ -37,6 +37,20 @@ const activityPages = {
 
 // Activities per page
 const ACTIVITIES_PER_PAGE = 25;
+
+// Function to format date to Indonesia time (GMT+7)
+function formatDateToIndonesiaTime(dateString) {
+  const date = new Date(dateString);
+  // Adjust to GMT+7 (Indonesia Western Time)
+  const jakartaTime = new Date(date.getTime() + (7 * 60 * 60 * 1000)); // UTC+7
+  
+  // Format as dd/mm/yyyy
+  const day = ('0' + jakartaTime.getUTCDate()).slice(-2);
+  const month = ('0' + (jakartaTime.getUTCMonth() + 1)).slice(-2);
+  const year = jakartaTime.getUTCFullYear();
+  
+  return `${day}/${month}/${year}`;
+}
 
 // Function to load activities from file
 async function loadActivities() {
@@ -139,9 +153,8 @@ async function updateActivitiesMessage() {
       } else {
         // Create activity lines for the current page
         const activityLines = displayActivities.map((activity, index) => {
-          const date = new Date(activity.createdAt);
-          // Format date as dd/mm/yyyy
-          const formattedDate = `${('0' + date.getDate()).slice(-2)}/${('0' + (date.getMonth() + 1)).slice(-2)}/${date.getFullYear()}`;
+          // Format date using Indonesia time
+          const formattedDate = formatDateToIndonesiaTime(activity.createdAt);
           // Only show brackets with description if a description exists
           const descriptionText = activity.description ? ` [${activity.description}]` : '';
           // Adjust index to show the actual number in the full list
@@ -260,6 +273,10 @@ const commands = [
       option.setName('description')
         .setDescription('Description of the activity (optional)')
         .setRequired(false)),
+  
+  new SlashCommandBuilder()
+    .setName('quickadd')
+    .setDescription('Add a gang activity using buttons for easier input'),
   
   new SlashCommandBuilder()
     .setName('channel')
@@ -395,56 +412,210 @@ client.on('interactionCreate', async interaction => {
 client.on('interactionCreate', async interaction => {
   if (!interaction.isButton()) return;
   
-  try {
-    const [action, type] = interaction.customId.split('_');
-    
-    // Make sure it's a valid type
-    if (!VALID_TYPES.includes(type)) return;
-    
-    // Determine the new page based on the button pressed
-    const activities = await loadActivities();
-    const typeActivities = activities.filter(a => a.type === type);
-    const totalPages = Math.ceil(typeActivities.length / ACTIVITIES_PER_PAGE);
-    
-    switch (action) {
-      case 'first':
-        activityPages[type] = 0;
-        break;
-      case 'prev':
-        activityPages[type] = Math.max(0, activityPages[type] - 1);
-        break;
-      case 'next':
-        activityPages[type] = Math.min(totalPages - 1, activityPages[type] + 1);
-        break;
-      case 'last':
-        activityPages[type] = Math.max(0, totalPages - 1);
-        break;
-      default:
-        return;
-    }
-    
-    // Acknowledge the interaction
-    await interaction.deferUpdate();
-    
-    // Update the activities message with the new page
-    await updateActivitiesMessage();
-  } catch (error) {
-    console.error('Error handling button interaction:', error);
+  // Check if this is a pagination button
+  if (interaction.customId.startsWith('first_') || 
+      interaction.customId.startsWith('prev_') || 
+      interaction.customId.startsWith('next_') || 
+      interaction.customId.startsWith('last_')) {
     try {
+      const [action, type] = interaction.customId.split('_');
+      
+      // Make sure it's a valid type
+      if (!VALID_TYPES.includes(type)) return;
+      
+      // Determine the new page based on the button pressed
+      const activities = await loadActivities();
+      const typeActivities = activities.filter(a => a.type === type);
+      const totalPages = Math.ceil(typeActivities.length / ACTIVITIES_PER_PAGE);
+      
+      switch (action) {
+        case 'first':
+          activityPages[type] = 0;
+          break;
+        case 'prev':
+          activityPages[type] = Math.max(0, activityPages[type] - 1);
+          break;
+        case 'next':
+          activityPages[type] = Math.min(totalPages - 1, activityPages[type] + 1);
+          break;
+        case 'last':
+          activityPages[type] = Math.max(0, totalPages - 1);
+          break;
+        default:
+          return;
+      }
+      
+      // Acknowledge the interaction
+      await interaction.deferUpdate();
+      
+      // Update the activities message with the new page
+      await updateActivitiesMessage();
+    } catch (error) {
+      console.error('Error handling pagination button interaction:', error);
+      try {
+        await interaction.reply({
+          content: 'There was an error while handling the pagination!',
+          flags: MessageFlags.Ephemeral
+        });
+      } catch (e) {
+        // If replying fails, try to update the interaction
+        try {
+          await interaction.update({
+            content: 'There was an error while handling the pagination!',
+            components: []
+          });
+        } catch (innerError) {
+          console.error('Failed to respond to button interaction:', innerError);
+        }
+      }
+    }
+  }
+  
+  // Check if this is an activity add button
+  if (interaction.customId.startsWith('add_')) {
+    try {
+      const type = interaction.customId.substring(4); // Get the activity type from the button ID
+      
+      // Load gangs for the select menu
+      const gangs = await loadGangs();
+      
+      if (gangs.length === 0) {
+        return interaction.reply({
+          content: 'No gangs have been added yet. Use /gangadd to add gangs first.',
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Create a modal
+      const modal = new ModalBuilder()
+        .setCustomId(`activity_modal_${type}`)
+        .setTitle(`Add ${type} Activity`);
+      
+      // Create gang selection dropdown - using a text input with autocomplete instead
+      // since Discord modals don't support select menus
+      const gangInput = new TextInputBuilder()
+        .setCustomId('gangname')
+        .setLabel('Gang Name')
+        .setPlaceholder('Enter the gang name')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+      
+      // Create description input
+      const descriptionInput = new TextInputBuilder()
+        .setCustomId('description')
+        .setLabel('Description (optional)')
+        .setPlaceholder('Enter a description for this activity')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false);
+      
+      // Add inputs to the modal
+      const gangRow = new ActionRowBuilder().addComponents(gangInput);
+      const descriptionRow = new ActionRowBuilder().addComponents(descriptionInput);
+      
+      modal.addComponents(gangRow, descriptionRow);
+      
+      // Show the modal
+      await interaction.showModal(modal);
+    } catch (error) {
+      console.error('Error handling activity add button:', error);
+      try {
+        await interaction.reply({
+          content: 'There was an error while showing the activity form!',
+          flags: MessageFlags.Ephemeral
+        });
+      } catch (e) {
+        console.error('Failed to respond to button interaction:', e);
+      }
+    }
+  }
+});
+
+// Handle modal submissions
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isModalSubmit()) return;
+  
+  if (interaction.customId.startsWith('activity_modal_')) {
+    try {
+      // Extract the activity type from the modal ID
+      const type = interaction.customId.substring('activity_modal_'.length);
+      
+      // Get form values
+      const gangName = interaction.fields.getTextInputValue('gangname');
+      const description = interaction.fields.getTextInputValue('description');
+      
+      // Check if gang exists
+      const gangs = await loadGangs();
+      if (!gangs.includes(gangName)) {
+        return interaction.reply({
+          content: `Gang "${gangName}" not found. Make sure to enter an exact gang name or use /gangadd to add it first.`,
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Load existing activities
+      const activities = await loadActivities();
+      
+      // Check if an activity for this gang already exists
+      const existingActivityIndex = activities.findIndex(activity => activity.gangName === gangName);
+      
+      let newActivity;
+      let updateMessage = 'Activity Added';
+      
+      if (existingActivityIndex !== -1) {
+        // Update existing activity
+        newActivity = {
+          ...activities[existingActivityIndex],
+          description,
+          type,
+          updatedAt: new Date().toISOString(),
+          updatedBy: interaction.user.id
+        };
+        
+        // Replace the existing activity
+        activities[existingActivityIndex] = newActivity;
+        updateMessage = 'Activity Updated';
+      } else {
+        // Create new activity
+        newActivity = {
+          id: Date.now().toString(),
+          gangName,
+          description,
+          type,
+          createdAt: new Date().toISOString(),
+          createdBy: interaction.user.id
+        };
+        
+        // Add to activities list
+        activities.push(newActivity);
+      }
+      
+      // Save updated list
+      await saveActivities(activities);
+      
+      // Create embedded response for the user
+      const date = new Date();
+      const formattedDate = formatDateToIndonesiaTime(date.toISOString());
+      
+      // Only show brackets with description if a description exists
+      const descriptionText = description ? ` [${description}]` : '';
+      
+      const embed = new EmbedBuilder()
+        .setColor(getColorForType(type))
+        .setTitle(updateMessage)
+        .setDescription(`**${gangName}**${descriptionText} (${formattedDate})`)
+        .setFooter({ text: `Type: ${type}` })
+        .setTimestamp();
+      
+      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      
+      // Update the activities message
+      await updateActivitiesMessage();
+    } catch (error) {
+      console.error('Error handling modal submission:', error);
       await interaction.reply({
-        content: 'There was an error while handling the pagination!',
+        content: 'There was an error while processing your activity submission!',
         flags: MessageFlags.Ephemeral
       });
-    } catch (e) {
-      // If replying fails, try to update the interaction
-      try {
-        await interaction.update({
-          content: 'There was an error while handling the pagination!',
-          components: []
-        });
-      } catch (innerError) {
-        console.error('Failed to respond to button interaction:', innerError);
-      }
     }
   }
 });
@@ -512,7 +683,8 @@ client.on('interactionCreate', async interaction => {
       
       // Create embedded response for the command user
       const date = new Date();
-      const formattedDate = `${('0' + date.getDate()).slice(-2)}/${('0' + (date.getMonth() + 1)).slice(-2)}/${date.getFullYear()}`;
+      // Format date using Indonesia time
+      const formattedDate = formatDateToIndonesiaTime(date.toISOString());
       
       // Only show brackets with description if a description exists
       const descriptionText = description ? ` [${description}]` : '';
@@ -530,6 +702,42 @@ client.on('interactionCreate', async interaction => {
       await updateActivitiesMessage();
     } catch (error) {
       console.error('Error handling activity command:', error);
+      await interaction.reply({
+        content: 'There was an error while executing this command!',
+        flags: MessageFlags.Ephemeral
+      });
+    }
+  } else if (commandName === 'quickadd') {
+    try {
+      // Create buttons for each activity type
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('add_Our Turn')
+            .setLabel('Our Turn')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId('add_Opps Turn')
+            .setLabel('Opps Turn')
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId('add_EBK')
+            .setLabel('EBK')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('add_No Beef')
+            .setLabel('No Beef')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+      // Send message with buttons
+      await interaction.reply({
+        content: 'Select type of activity to add:',
+        components: [row],
+        flags: MessageFlags.Ephemeral
+      });
+    } catch (error) {
+      console.error('Error handling quickadd command:', error);
       await interaction.reply({
         content: 'There was an error while executing this command!',
         flags: MessageFlags.Ephemeral
