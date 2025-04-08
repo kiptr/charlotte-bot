@@ -563,10 +563,10 @@ client.on('interactionCreate', async interaction => {
         });
       }
       
-      // Create a modal for searching gangs
+      // Create a modal for searching gangs with shortened title
       const modal = new ModalBuilder()
         .setCustomId(`search_gangs_${typeCode}`) // Use shorter code in the ID
-        .setTitle(`Search for a Gang - ${type}`);
+        .setTitle(`Gang Search - ${typeCode.replace(/_/g, ' ')}`); // Short title under 45 chars
       
       // Create gang search input
       const searchInput = new TextInputBuilder()
@@ -611,7 +611,7 @@ client.on('interactionCreate', async interaction => {
       // Create a modal for description
       const modal = new ModalBuilder()
         .setCustomId(`activity_modal_${typeCode}_${gangName}`) // Use type code in ID
-        .setTitle(`Add ${type} Activity for ${gangName}`);
+        .setTitle(`Add ${typeCode.replace(/_/g, ' ')} - ${gangName.substring(0, 20)}${gangName.length > 20 ? '...' : ''}`);
       
       // Create description input
       const descriptionInput = new TextInputBuilder()
