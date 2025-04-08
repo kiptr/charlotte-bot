@@ -535,7 +535,7 @@ client.on('interactionCreate', async interaction => {
     try {
       const type = interaction.customId.substring(4); // Get the activity type from the button ID
       
-      // Load gangs for the select menu
+      // Load gangs for validation later
       const gangs = await loadGangs();
       
       if (gangs.length === 0) {
@@ -545,31 +545,40 @@ client.on('interactionCreate', async interaction => {
         });
       }
       
-      // Create a select menu for gang selection
-      const selectMenu = new ActionRowBuilder()
-        .addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId(`select_gang_${type}`)
-            .setPlaceholder('Select a gang')
-            .addOptions(
-              gangs.map(gang => ({
-                label: gang,
-                value: gang
-              })).slice(0, 25) // Discord limits to 25 options
-            )
-        );
+      // Create a modal with both gang name and description
+      const modal = new ModalBuilder()
+        .setCustomId(`activity_modal_direct_${type}`)
+        .setTitle(`Add ${type} Activity`);
       
-      // Send message with select menu
-      await interaction.reply({
-        content: `Adding a **${type}** activity. Please select a gang:`,
-        components: [selectMenu],
-        flags: MessageFlags.Ephemeral
-      });
+      // Create gang name input
+      const gangInput = new TextInputBuilder()
+        .setCustomId('gangname')
+        .setLabel('Gang Name')
+        .setPlaceholder('Enter the exact gang name')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+      
+      // Create description input
+      const descriptionInput = new TextInputBuilder()
+        .setCustomId('description')
+        .setLabel('Description (optional)')
+        .setPlaceholder('Enter a description for this activity')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false);
+      
+      // Add inputs to the modal
+      const gangRow = new ActionRowBuilder().addComponents(gangInput);
+      const descriptionRow = new ActionRowBuilder().addComponents(descriptionInput);
+      
+      modal.addComponents(gangRow, descriptionRow);
+      
+      // Show the modal
+      await interaction.showModal(modal);
     } catch (error) {
       console.error('Error handling activity add button:', error);
       try {
         await interaction.reply({
-          content: 'There was an error while showing the gang selection!',
+          content: 'There was an error while showing the activity form!',
           flags: MessageFlags.Ephemeral
         });
       } catch (e) {
@@ -623,6 +632,152 @@ client.on('interactionCreate', async interaction => {
 client.on('interactionCreate', async interaction => {
   if (!interaction.isModalSubmit()) return;
   
+  // Handle direct activity modal submission
+  if (interaction.customId.startsWith('activity_modal_direct_')) {
+    try {
+      const type = interaction.customId.substring('activity_modal_direct_'.length);
+      
+      // Get form values
+      const gangName = interaction.fields.getTextInputValue('gangname');
+      const description = interaction.fields.getTextInputValue('description');
+      
+      // Check if gang exists
+      const gangs = await loadGangs();
+      if (!gangs.includes(gangName)) {
+        return interaction.reply({
+          content: `Gang "${gangName}" not found. Make sure to enter an exact gang name or use /gangadd to add it first. Available gangs: ${gangs.slice(0, 10).join(", ")}${gangs.length > 10 ? '...' : ''}`,
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Load existing activities
+      const activities = await loadActivities();
+      
+      // Check if an activity for this gang already exists
+      const existingActivityIndex = activities.findIndex(activity => activity.gangName === gangName);
+      
+      let newActivity;
+      let updateMessage = 'Activity Added';
+      
+      if (existingActivityIndex !== -1) {
+        // Update existing activity
+        newActivity = {
+          ...activities[existingActivityIndex],
+          description,
+          type,
+          updatedAt: new Date().toISOString(),
+          updatedBy: interaction.user.id
+        };
+        
+        // Replace the existing activity
+        activities[existingActivityIndex] = newActivity;
+        updateMessage = 'Activity Updated';
+      } else {
+        // Create new activity
+        newActivity = {
+          id: Date.now().toString(),
+          gangName,
+          description,
+          type,
+          createdAt: new Date().toISOString(),
+          createdBy: interaction.user.id
+        };
+        
+        // Add to activities list
+        activities.push(newActivity);
+      }
+      
+      // Save updated list
+      await saveActivities(activities);
+      
+      // Create embedded response for the user
+      const date = new Date();
+      const formattedDate = formatDateToIndonesiaTime(date.toISOString());
+      
+      // Only show brackets with description if a description exists
+      const descriptionText = description ? ` [${description}]` : '';
+      
+      const embed = new EmbedBuilder()
+        .setColor(getColorForType(type))
+        .setTitle(updateMessage)
+        .setDescription(`**${gangName}**${descriptionText} (${formattedDate})`)
+        .setFooter({ text: `Type: ${type}` })
+        .setTimestamp();
+      
+      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      
+      // Update the activities message
+      await updateActivitiesMessage();
+    } catch (error) {
+      console.error('Error handling direct activity modal submission:', error);
+      await interaction.reply({
+        content: 'There was an error while processing your activity submission!',
+        flags: MessageFlags.Ephemeral
+      });
+    }
+    return;
+  }
+  
+  // Handle gang search submission (keeping in case we need it later)
+  if (interaction.customId.startsWith('search_gangs_')) {
+    try {
+      const type = interaction.customId.substring('search_gangs_'.length);
+      const searchQuery = interaction.fields.getTextInputValue('gang_search').toLowerCase();
+      
+      // Load all gangs
+      const gangs = await loadGangs();
+      
+      // Filter gangs based on search query
+      let filteredGangs = gangs;
+      if (searchQuery.trim() !== '') {
+        filteredGangs = gangs.filter(gang => 
+          gang.toLowerCase().includes(searchQuery)
+        );
+      }
+      
+      // If no matches found, inform the user
+      if (filteredGangs.length === 0) {
+        return interaction.reply({
+          content: `No gangs found matching "${searchQuery}". Try a different search or use /gangadd to add a new gang.`,
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Create a select menu with the filtered gangs
+      const selectMenu = new ActionRowBuilder()
+        .addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`select_gang_${type}`)
+            .setPlaceholder('Select a gang')
+            .addOptions(
+              filteredGangs.map(gang => ({
+                label: gang,
+                value: gang
+              })).slice(0, 25) // Discord limits to 25 options
+            )
+        );
+      
+      // Show search results
+      const resultMessage = searchQuery.trim() !== '' 
+        ? `Found ${filteredGangs.length} ${filteredGangs.length === 1 ? 'gang' : 'gangs'} matching "${searchQuery}"`
+        : 'Showing all gangs';
+      
+      await interaction.reply({
+        content: `${resultMessage}. Please select a gang for **${type}** activity:`,
+        components: [selectMenu],
+        flags: MessageFlags.Ephemeral
+      });
+    } catch (error) {
+      console.error('Error handling gang search:', error);
+      await interaction.reply({
+        content: 'There was an error while processing your gang search!',
+        flags: MessageFlags.Ephemeral
+      });
+    }
+    return;
+  }
+  
+  // Handle activity form submission
   if (interaction.customId.startsWith('activity_modal_')) {
     try {
       // Extract type and gang name from the modal ID
@@ -813,7 +968,7 @@ client.on('interactionCreate', async interaction => {
 
       // Send message with buttons
       await interaction.reply({
-        content: 'Select type of activity to add:',
+        content: 'Select type of activity to add. A form will appear where you can enter the gang name and description:',
         components: [row],
         flags: MessageFlags.Ephemeral
       });
