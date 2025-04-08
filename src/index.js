@@ -21,6 +21,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildPresences, // Add Presence intent to detect streaming status
   ]
 });
 
@@ -57,6 +58,9 @@ const TYPE_BY_CODE = Object.entries(TYPE_CODES).reduce((acc, [code, type]) => {
   acc[type] = code;
   return acc;
 }, {});
+
+// Track users who are currently streaming to avoid duplicate notifications
+const activeStreamers = new Set();
 
 // Function to format date to Indonesia time (GMT+7)
 function formatDateToIndonesiaTime(dateString) {
@@ -359,7 +363,8 @@ const commands = [
         .setDescription('The type of content to display in this channel')
         .setRequired(true)
         .addChoices(
-          { name: 'Activity list', value: 'activity' }
+          { name: 'Activity list', value: 'activity' },
+          { name: 'Stream notifications', value: 'stream' }
         ))
     .addChannelOption(option =>
       option.setName('channel')
@@ -385,7 +390,15 @@ const commands = [
   
   new SlashCommandBuilder()
     .setName('gangs')
-    .setDescription('View all gangs in the list')
+    .setDescription('View all gangs in the list'),
+  
+  new SlashCommandBuilder()
+    .setName('stream')
+    .setDescription('Register a YouTube stream link for notifications')
+    .addStringOption(option =>
+      option.setName('link')
+        .setDescription('The YouTube stream link')
+        .setRequired(true))
 ];
 
 // Register slash commands when the bot is ready
@@ -1189,6 +1202,17 @@ client.on('interactionCreate', async interaction => {
           content: `Activities will now be posted and updated in ${channel}.`,
           flags: MessageFlags.Ephemeral
         });
+      } else if (channelType === 'stream') {
+        config.channels.stream = {
+          channelId: channel.id
+        };
+        
+        await saveConfig(config);
+        
+        await interaction.reply({
+          content: `Stream notifications will now be posted in ${channel}.`,
+          flags: MessageFlags.Ephemeral
+        });
       } else {
         await interaction.reply({
           content: `Unknown channel type: ${channelType}`,
@@ -1296,6 +1320,143 @@ client.on('interactionCreate', async interaction => {
         flags: MessageFlags.Ephemeral
       });
     }
+  } else if (commandName === 'stream') {
+    try {
+      const streamLink = interaction.options.getString('link');
+      
+      // Validate that it's a YouTube link
+      if (!streamLink.includes('youtube.com') && !streamLink.includes('youtu.be')) {
+        return interaction.reply({
+          content: 'Please provide a valid YouTube link.',
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Load existing config
+      const config = await loadConfig();
+      
+      // Check if stream channel is configured
+      if (!config.channels || !config.channels.stream || !config.channels.stream.channelId) {
+        return interaction.reply({
+          content: 'No stream notification channel has been set. Use `/channel type:stream channel:#your-channel` first.',
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Get the stream notification channel
+      const streamChannel = await client.channels.fetch(config.channels.stream.channelId);
+      if (!streamChannel) {
+        return interaction.reply({
+          content: 'Could not find the configured stream notification channel. Please check the channel settings.',
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Create an embedded announcement
+      const embed = new EmbedBuilder()
+        .setColor('#FF0000') // YouTube red
+        .setTitle('🔴 Live Stream Alert!')
+        .setDescription(`**${interaction.user.username}** is now streaming!`)
+        .addFields({ name: 'Stream Link', value: streamLink })
+        .setTimestamp()
+        .setThumbnail(interaction.user.displayAvatarURL());
+      
+      // Send the stream notification
+      await streamChannel.send({
+        content: `Hey @everyone, check out **${interaction.user.username}'s** stream!`,
+        embeds: [embed]
+      });
+      
+      await interaction.reply({
+        content: 'Your stream notification has been sent!',
+        flags: MessageFlags.Ephemeral
+      });
+    } catch (error) {
+      console.error('Error handling stream command:', error);
+      await interaction.reply({
+        content: 'There was an error while sending the stream notification!',
+        flags: MessageFlags.Ephemeral
+      });
+    }
+  }
+});
+
+// Handle user streaming status changes
+client.on('presenceUpdate', async (oldPresence, newPresence) => {
+  try {
+    // No previous presence (user just came online) or no new presence (user went offline)
+    if (!oldPresence || !newPresence) return;
+    
+    const config = await loadConfig();
+    
+    // Check if stream channel is configured
+    if (!config.channels || !config.channels.stream || !config.channels.stream.channelId) {
+      return; // No stream channel configured, can't send notifications
+    }
+    
+    const userId = newPresence.userId;
+    
+    // Check if the user just started streaming
+    const wasStreaming = oldPresence.activities?.some(activity => activity.type === 1); // 1 = Streaming
+    const isStreaming = newPresence.activities?.some(activity => activity.type === 1);
+    
+    // Get the streaming activity if it exists
+    const streamingActivity = newPresence.activities?.find(activity => activity.type === 1);
+    
+    // User just started streaming and isn't already in our active streamers list
+    if (!wasStreaming && isStreaming && !activeStreamers.has(userId) && streamingActivity) {
+      // Add to active streamers to prevent duplicate notifications
+      activeStreamers.add(userId);
+      
+      // Check if this is a YouTube stream
+      const isYouTubeStream = 
+        streamingActivity.url?.includes('youtube.com') || 
+        streamingActivity.url?.includes('youtu.be');
+      
+      if (!isYouTubeStream) {
+        // Not a YouTube stream, remove from active streamers and return
+        activeStreamers.delete(userId);
+        return;
+      }
+      
+      // Get stream details
+      const streamUrl = streamingActivity.url;
+      const streamName = streamingActivity.details || 'Live Stream';
+      const userName = newPresence.user?.username || 'Someone';
+      
+      // Get the stream notification channel
+      const streamChannel = await client.channels.fetch(config.channels.stream.channelId);
+      if (!streamChannel) {
+        activeStreamers.delete(userId);
+        return; // Channel not found
+      }
+      
+      // Create an embedded announcement
+      const embed = new EmbedBuilder()
+        .setColor('#FF0000') // YouTube red
+        .setTitle('🔴 Live Stream Alert!')
+        .setDescription(`**${userName}** is now streaming on YouTube!`)
+        .addFields(
+          { name: 'Stream Title', value: streamName },
+          { name: 'Stream Link', value: streamUrl }
+        )
+        .setTimestamp()
+        .setThumbnail(newPresence.user?.displayAvatarURL());
+      
+      // Send the stream notification
+      await streamChannel.send({
+        content: `Hey @everyone, **${userName}** is now streaming on YouTube! ${streamUrl}`,
+        embeds: [embed]
+      });
+      
+      console.log(`Sent stream notification for ${userName}`);
+    } 
+    // User stopped streaming, remove from active streamers list
+    else if (wasStreaming && !isStreaming) {
+      activeStreamers.delete(userId);
+    }
+  } catch (error) {
+    console.error('Error handling presence update:', error);
   }
 });
 
