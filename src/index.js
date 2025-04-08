@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionsBitField, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionsBitField, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder } from 'discord.js';
 import { config } from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
@@ -25,18 +25,24 @@ const client = new Client({
 });
 
 // Array of valid activity types
-const VALID_TYPES = ['Our Turn', 'Opps Turn', 'EBK', 'No Beef'];
+const VALID_TYPES = ['Our Turn (Giliran Kita)', 'Opps Turn (Giliran Mereka)', 'EBK', 'No Beef'];
 
 // Store the current page for each activity type
 const activityPages = {
-  'Our Turn': 0,
-  'Opps Turn': 0,
+  'Our Turn (Giliran Kita)': 0,
+  'Opps Turn (Giliran Mereka)': 0,
   'EBK': 0,
   'No Beef': 0
 };
 
 // Activities per page
 const ACTIVITIES_PER_PAGE = 25;
+
+// Define old and new type mappings for migration
+const TYPE_MIGRATIONS = {
+  'Our Turn': 'Our Turn (Giliran Kita)',
+  'Opps Turn': 'Opps Turn (Giliran Mereka)'
+};
 
 // Function to format date to Indonesia time (GMT+7)
 function formatDateToIndonesiaTime(dateString) {
@@ -201,6 +207,29 @@ async function updateActivitiesMessage() {
       }
     }
     
+    // Add quick add buttons row at the bottom
+    const quickAddRow = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId('add_Our Turn (Giliran Kita)')
+          .setLabel('Add: Our Turn (Giliran Kita)')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId('add_Opps Turn (Giliran Mereka)')
+          .setLabel('Add: Opps Turn (Giliran Mereka)')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId('add_EBK')
+          .setLabel('Add: EBK')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('add_No Beef')
+          .setLabel('Add: No Beef')
+          .setStyle(ButtonStyle.Secondary)
+      );
+    
+    components.push(quickAddRow);
+    
     // Get the channel
     const channelId = config.channels.activity.channelId;
     const channel = await client.channels.fetch(channelId);
@@ -236,9 +265,9 @@ async function updateActivitiesMessage() {
 // Helper function to get color for each type
 function getColorForType(type) {
   switch (type) {
-    case 'Our Turn':
+    case 'Our Turn (Giliran Kita)':
       return '#00FF00'; // Green
-    case 'Opps Turn':
+    case 'Opps Turn (Giliran Mereka)':
       return '#FF0000'; // Red
     case 'EBK':
       return '#FFA500'; // Orange
@@ -246,6 +275,33 @@ function getColorForType(type) {
       return '#0000FF'; // Blue
     default:
       return '#FFFFFF'; // White
+  }
+}
+
+// Function to migrate activity types
+async function migrateActivityTypes() {
+  try {
+    console.log('Checking for activities that need migration...');
+    const activities = await loadActivities();
+    let migrationNeeded = false;
+    
+    // Check if any activities use old type names
+    activities.forEach(activity => {
+      if (TYPE_MIGRATIONS[activity.type]) {
+        migrationNeeded = true;
+        activity.type = TYPE_MIGRATIONS[activity.type];
+      }
+    });
+    
+    // If migration was needed, save the updated activities
+    if (migrationNeeded) {
+      await saveActivities(activities);
+      console.log('Successfully migrated activity types to include Indonesian translations!');
+    } else {
+      console.log('No activity type migration needed.');
+    }
+  } catch (error) {
+    console.error('Error during activity type migration:', error);
   }
 }
 
@@ -264,8 +320,8 @@ const commands = [
         .setDescription('Type of activity')
         .setRequired(true)
         .addChoices(
-          { name: 'Our Turn', value: 'Our Turn' },
-          { name: 'Opps Turn', value: 'Opps Turn' },
+          { name: 'Our Turn (Giliran Kita)', value: 'Our Turn (Giliran Kita)' },
+          { name: 'Opps Turn (Giliran Mereka)', value: 'Opps Turn (Giliran Mereka)' },
           { name: 'EBK', value: 'EBK' },
           { name: 'No Beef', value: 'No Beef' }
         ))
@@ -342,6 +398,9 @@ client.once('ready', async () => {
         channels: {}
       });
     }
+    
+    // Migrate existing activities to new type names
+    await migrateActivityTypes();
     
     // Register slash commands
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -486,19 +545,54 @@ client.on('interactionCreate', async interaction => {
         });
       }
       
-      // Create a modal
-      const modal = new ModalBuilder()
-        .setCustomId(`activity_modal_${type}`)
-        .setTitle(`Add ${type} Activity`);
+      // Create a select menu for gang selection
+      const selectMenu = new ActionRowBuilder()
+        .addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`select_gang_${type}`)
+            .setPlaceholder('Select a gang')
+            .addOptions(
+              gangs.map(gang => ({
+                label: gang,
+                value: gang
+              })).slice(0, 25) // Discord limits to 25 options
+            )
+        );
       
-      // Create gang selection dropdown - using a text input with autocomplete instead
-      // since Discord modals don't support select menus
-      const gangInput = new TextInputBuilder()
-        .setCustomId('gangname')
-        .setLabel('Gang Name')
-        .setPlaceholder('Enter the gang name')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+      // Send message with select menu
+      await interaction.reply({
+        content: `Adding a **${type}** activity. Please select a gang:`,
+        components: [selectMenu],
+        flags: MessageFlags.Ephemeral
+      });
+    } catch (error) {
+      console.error('Error handling activity add button:', error);
+      try {
+        await interaction.reply({
+          content: 'There was an error while showing the gang selection!',
+          flags: MessageFlags.Ephemeral
+        });
+      } catch (e) {
+        console.error('Failed to respond to button interaction:', e);
+      }
+    }
+  }
+});
+
+// Handle select menu interactions
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isStringSelectMenu()) return;
+  
+  // Handle gang selection
+  if (interaction.customId.startsWith('select_gang_')) {
+    try {
+      const type = interaction.customId.substring('select_gang_'.length);
+      const gangName = interaction.values[0]; // Get the selected gang
+      
+      // Create a modal for description
+      const modal = new ModalBuilder()
+        .setCustomId(`activity_modal_${type}_${gangName}`) // Include gang name in the ID
+        .setTitle(`Add ${type} Activity for ${gangName}`);
       
       // Create description input
       const descriptionInput = new TextInputBuilder()
@@ -509,23 +603,18 @@ client.on('interactionCreate', async interaction => {
         .setRequired(false);
       
       // Add inputs to the modal
-      const gangRow = new ActionRowBuilder().addComponents(gangInput);
       const descriptionRow = new ActionRowBuilder().addComponents(descriptionInput);
       
-      modal.addComponents(gangRow, descriptionRow);
+      modal.addComponents(descriptionRow);
       
       // Show the modal
       await interaction.showModal(modal);
     } catch (error) {
-      console.error('Error handling activity add button:', error);
-      try {
-        await interaction.reply({
-          content: 'There was an error while showing the activity form!',
-          flags: MessageFlags.Ephemeral
-        });
-      } catch (e) {
-        console.error('Failed to respond to button interaction:', e);
-      }
+      console.error('Error handling gang selection:', error);
+      await interaction.reply({
+        content: 'There was an error while processing your gang selection!',
+        flags: MessageFlags.Ephemeral
+      });
     }
   }
 });
@@ -536,21 +625,13 @@ client.on('interactionCreate', async interaction => {
   
   if (interaction.customId.startsWith('activity_modal_')) {
     try {
-      // Extract the activity type from the modal ID
-      const type = interaction.customId.substring('activity_modal_'.length);
+      // Extract type and gang name from the modal ID
+      const parts = interaction.customId.substring('activity_modal_'.length).split('_');
+      const type = parts[0];
+      const gangName = parts.slice(1).join('_'); // In case the gang name contains underscores
       
-      // Get form values
-      const gangName = interaction.fields.getTextInputValue('gangname');
+      // Get the description from the form
       const description = interaction.fields.getTextInputValue('description');
-      
-      // Check if gang exists
-      const gangs = await loadGangs();
-      if (!gangs.includes(gangName)) {
-        return interaction.reply({
-          content: `Gang "${gangName}" not found. Make sure to enter an exact gang name or use /gangadd to add it first.`,
-          flags: MessageFlags.Ephemeral
-        });
-      }
       
       // Load existing activities
       const activities = await loadActivities();
@@ -713,12 +794,12 @@ client.on('interactionCreate', async interaction => {
       const row = new ActionRowBuilder()
         .addComponents(
           new ButtonBuilder()
-            .setCustomId('add_Our Turn')
-            .setLabel('Our Turn')
+            .setCustomId('add_Our Turn (Giliran Kita)')
+            .setLabel('Our Turn (Giliran Kita)')
             .setStyle(ButtonStyle.Success),
           new ButtonBuilder()
-            .setCustomId('add_Opps Turn')
-            .setLabel('Opps Turn')
+            .setCustomId('add_Opps Turn (Giliran Mereka)')
+            .setLabel('Opps Turn (Giliran Mereka)')
             .setStyle(ButtonStyle.Danger),
           new ButtonBuilder()
             .setCustomId('add_EBK')
