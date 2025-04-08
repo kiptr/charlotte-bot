@@ -548,7 +548,7 @@ client.on('interactionCreate', async interaction => {
   }
   
   // Check if this is an activity add button
-  if (interaction.customId.startsWith('add_')) {
+  if (interaction.customId.startsWith('add_') && !interaction.customId.startsWith('add_gang_') && !interaction.customId.startsWith('add_first_gang_')) {
     try {
       const typeCode = interaction.customId.substring(4); // Get the activity type code from the button ID
       const type = TYPE_CODES[typeCode] || typeCode; // Convert to full type name or use as is
@@ -557,8 +557,18 @@ client.on('interactionCreate', async interaction => {
       const gangs = await loadGangs();
       
       if (gangs.length === 0) {
+        // Create "Add Gang" button
+        const addGangButton = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(`add_first_gang_${typeCode}`)
+              .setLabel("Add your first gang")
+              .setStyle(ButtonStyle.Primary)
+          );
+          
         return interaction.reply({
-          content: 'No gangs have been added yet. Use /gangadd to add gangs first.',
+          content: 'No gangs have been added yet. Add your first gang:',
+          components: [addGangButton],
           flags: MessageFlags.Ephemeral
         });
       }
@@ -588,6 +598,55 @@ client.on('interactionCreate', async interaction => {
       try {
         await interaction.reply({
           content: 'There was an error while showing the gang search!',
+          flags: MessageFlags.Ephemeral
+        });
+      } catch (e) {
+        console.error('Failed to respond to button interaction:', e);
+      }
+    }
+  }
+  
+  // Handle "Add Gang" button
+  if (interaction.customId.startsWith('add_gang_') || interaction.customId.startsWith('add_first_gang_')) {
+    try {
+      let typeCode = '';
+      let gangNameSuggestion = '';
+      
+      if (interaction.customId.startsWith('add_gang_')) {
+        // Extract type code and suggested name
+        const parts = interaction.customId.substring('add_gang_'.length).split('_');
+        typeCode = parts[0];
+        gangNameSuggestion = parts.slice(1).join('_');
+      } else { // add_first_gang_
+        typeCode = interaction.customId.substring('add_first_gang_'.length);
+      }
+      
+      // Create a modal for adding a new gang
+      const modal = new ModalBuilder()
+        .setCustomId(`add_gang_modal_${typeCode}`)
+        .setTitle("Add New Gang");
+      
+      // Create gang name input
+      const gangNameInput = new TextInputBuilder()
+        .setCustomId('gang_name')
+        .setLabel('Gang Name')
+        .setPlaceholder('Enter the gang name')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setValue(gangNameSuggestion); // Pre-fill with suggested name if available
+      
+      // Add inputs to the modal
+      const gangNameRow = new ActionRowBuilder().addComponents(gangNameInput);
+      
+      modal.addComponents(gangNameRow);
+      
+      // Show the modal
+      await interaction.showModal(modal);
+    } catch (error) {
+      console.error('Error handling add gang button:', error);
+      try {
+        await interaction.reply({
+          content: 'There was an error while showing the add gang form!',
           flags: MessageFlags.Ephemeral
         });
       } catch (e) {
@@ -654,8 +713,21 @@ client.on('interactionCreate', async interaction => {
       // Check if gang exists
       const gangs = await loadGangs();
       if (!gangs.includes(gangName)) {
+        // Get the type code for the button ID
+        const typeCode = TYPE_BY_CODE[type] || type.toLowerCase().replace(/\s+/g, '_');
+        
+        // Create "Add Gang" button
+        const addGangButton = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(`add_gang_${typeCode}_${gangName}`)
+              .setLabel(`Add "${gangName}" as new gang`)
+              .setStyle(ButtonStyle.Primary)
+          );
+        
         return interaction.reply({
-          content: `Gang "${gangName}" not found. Make sure to enter an exact gang name or use /gangadd to add it first. Available gangs: ${gangs.slice(0, 10).join(", ")}${gangs.length > 10 ? '...' : ''}`,
+          content: `Gang "${gangName}" not found. Would you like to add it as a new gang?`,
+          components: [addGangButton],
           flags: MessageFlags.Ephemeral
         });
       }
@@ -746,10 +818,20 @@ client.on('interactionCreate', async interaction => {
         );
       }
       
-      // If no matches found, inform the user
+      // If no matches found, show add gang button
       if (filteredGangs.length === 0) {
+        // Create "Add Gang" button
+        const addGangButton = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(`add_gang_${typeCode}_${searchQuery.trim()}`)
+              .setLabel(`Add "${searchQuery.trim()}" as new gang`)
+              .setStyle(ButtonStyle.Primary)
+          );
+        
         return interaction.reply({
-          content: `No gangs found matching "${searchQuery}". Try a different search or use /gangadd to add a new gang.`,
+          content: `No gangs found matching "${searchQuery}". Would you like to add it as a new gang?`,
+          components: [addGangButton],
           flags: MessageFlags.Ephemeral
         });
       }
@@ -866,6 +948,80 @@ client.on('interactionCreate', async interaction => {
       });
     }
   }
+  
+  // Add a new handler for the "add gang modal" submission
+  if (interaction.customId.startsWith('add_gang_modal_')) {
+    try {
+      const typeCode = interaction.customId.substring('add_gang_modal_'.length);
+      const type = TYPE_CODES[typeCode] || typeCode; // Convert to full type name
+      
+      // Get the gang name from the form
+      const gangName = interaction.fields.getTextInputValue('gang_name').trim();
+      
+      if (!gangName) {
+        return interaction.reply({
+          content: 'Gang name cannot be empty.',
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Load existing gangs
+      const gangs = await loadGangs();
+      
+      // Check if gang already exists
+      if (gangs.includes(gangName)) {
+        return interaction.reply({
+          content: `Gang "${gangName}" already exists.`,
+          flags: MessageFlags.Ephemeral
+        });
+      }
+      
+      // Add gang to list
+      gangs.push(gangName);
+      
+      // Save updated list
+      await saveGangs(gangs);
+      
+      // Create a modal for adding activity description
+      const activityModal = new ModalBuilder()
+        .setCustomId(`activity_modal_${typeCode}_${gangName}`) // Use type code in ID
+        .setTitle(`Add ${typeCode.replace(/_/g, ' ')} - ${gangName.substring(0, 20)}${gangName.length > 20 ? '...' : ''}`);
+      
+      // Create description input
+      const descriptionInput = new TextInputBuilder()
+        .setCustomId('description')
+        .setLabel('Description (optional)')
+        .setPlaceholder('Enter a description for this activity')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false);
+      
+      // Add inputs to the modal
+      const descriptionRow = new ActionRowBuilder().addComponents(descriptionInput);
+      
+      activityModal.addComponents(descriptionRow);
+      
+      // Acknowledge the gang addition and show the activity modal
+      await interaction.reply({
+        content: `Gang "${gangName}" has been added to the list. Now enter activity details:`,
+        flags: MessageFlags.Ephemeral
+      });
+      
+      // Show the activity modal after a short delay
+      setTimeout(async () => {
+        try {
+          await interaction.showModal(activityModal);
+        } catch (error) {
+          console.error('Error showing activity modal after gang addition:', error);
+        }
+      }, 500);
+    } catch (error) {
+      console.error('Error handling add gang modal submission:', error);
+      await interaction.reply({
+        content: 'There was an error while adding the gang!',
+        flags: MessageFlags.Ephemeral
+      });
+    }
+  }
 });
 
 // Handle slash commands
@@ -883,8 +1039,21 @@ client.on('interactionCreate', async interaction => {
       // Check if gang exists
       const gangs = await loadGangs();
       if (!gangs.includes(gangName)) {
+        // Get the type code for the button ID
+        const typeCode = TYPE_BY_CODE[type] || type.toLowerCase().replace(/\s+/g, '_');
+        
+        // Create "Add Gang" button
+        const addGangButton = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(`add_gang_${typeCode}_${gangName}`)
+              .setLabel(`Add "${gangName}" as new gang`)
+              .setStyle(ButtonStyle.Primary)
+          );
+        
         return interaction.reply({
-          content: `Gang "${gangName}" not found. Use /gangadd to add it first.`,
+          content: `Gang "${gangName}" not found. Would you like to add it as a new gang?`,
+          components: [addGangButton],
           flags: MessageFlags.Ephemeral
         });
       }
