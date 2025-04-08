@@ -535,7 +535,7 @@ client.on('interactionCreate', async interaction => {
     try {
       const type = interaction.customId.substring(4); // Get the activity type from the button ID
       
-      // Load gangs for validation later
+      // Load gangs for the select menu
       const gangs = await loadGangs();
       
       if (gangs.length === 0) {
@@ -545,32 +545,23 @@ client.on('interactionCreate', async interaction => {
         });
       }
       
-      // Create a modal with both gang name and description
+      // Create a modal for searching gangs
       const modal = new ModalBuilder()
-        .setCustomId(`activity_modal_direct_${type}`)
-        .setTitle(`Add ${type} Activity`);
+        .setCustomId(`search_gangs_${type}`)
+        .setTitle(`Search for a Gang - ${type}`);
       
-      // Create gang name input
-      const gangInput = new TextInputBuilder()
-        .setCustomId('gangname')
-        .setLabel('Gang Name')
-        .setPlaceholder('Enter the exact gang name')
+      // Create gang search input
+      const searchInput = new TextInputBuilder()
+        .setCustomId('gang_search')
+        .setLabel('Gang Name (type to filter)')
+        .setPlaceholder('Type to filter or leave empty to see all gangs')
         .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-      
-      // Create description input
-      const descriptionInput = new TextInputBuilder()
-        .setCustomId('description')
-        .setLabel('Description (optional)')
-        .setPlaceholder('Enter a description for this activity')
-        .setStyle(TextInputStyle.Paragraph)
         .setRequired(false);
       
       // Add inputs to the modal
-      const gangRow = new ActionRowBuilder().addComponents(gangInput);
-      const descriptionRow = new ActionRowBuilder().addComponents(descriptionInput);
+      const searchRow = new ActionRowBuilder().addComponents(searchInput);
       
-      modal.addComponents(gangRow, descriptionRow);
+      modal.addComponents(searchRow);
       
       // Show the modal
       await interaction.showModal(modal);
@@ -578,7 +569,7 @@ client.on('interactionCreate', async interaction => {
       console.error('Error handling activity add button:', error);
       try {
         await interaction.reply({
-          content: 'There was an error while showing the activity form!',
+          content: 'There was an error while showing the gang search!',
           flags: MessageFlags.Ephemeral
         });
       } catch (e) {
