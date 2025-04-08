@@ -44,6 +44,20 @@ const TYPE_MIGRATIONS = {
   'Opps Turn': 'Opps Turn (Giliran Mereka)'
 };
 
+// Define activity type codes for shorter IDs
+const TYPE_CODES = {
+  'our_turn': 'Our Turn (Giliran Kita)',
+  'opps_turn': 'Opps Turn (Giliran Mereka)',
+  'ebk': 'EBK',
+  'no_beef': 'No Beef'
+};
+
+// Reverse map for looking up code by type
+const TYPE_BY_CODE = Object.entries(TYPE_CODES).reduce((acc, [code, type]) => {
+  acc[type] = code;
+  return acc;
+}, {});
+
 // Function to format date to Indonesia time (GMT+7)
 function formatDateToIndonesiaTime(dateString) {
   const date = new Date(dateString);
@@ -211,19 +225,19 @@ async function updateActivitiesMessage() {
     const quickAddRow = new ActionRowBuilder()
       .addComponents(
         new ButtonBuilder()
-          .setCustomId('add_Our Turn (Giliran Kita)')
+          .setCustomId('add_our_turn')
           .setLabel('Add: Our Turn (Giliran Kita)')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId('add_Opps Turn (Giliran Mereka)')
+          .setCustomId('add_opps_turn')
           .setLabel('Add: Opps Turn (Giliran Mereka)')
           .setStyle(ButtonStyle.Danger),
         new ButtonBuilder()
-          .setCustomId('add_EBK')
+          .setCustomId('add_ebk')
           .setLabel('Add: EBK')
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-          .setCustomId('add_No Beef')
+          .setCustomId('add_no_beef')
           .setLabel('Add: No Beef')
           .setStyle(ButtonStyle.Secondary)
       );
@@ -264,7 +278,10 @@ async function updateActivitiesMessage() {
 
 // Helper function to get color for each type
 function getColorForType(type) {
-  switch (type) {
+  // Check if this is a type code and convert to full type if needed
+  const fullType = TYPE_CODES[type] || type;
+  
+  switch (fullType) {
     case 'Our Turn (Giliran Kita)':
       return '#00FF00'; // Green
     case 'Opps Turn (Giliran Mereka)':
@@ -272,9 +289,9 @@ function getColorForType(type) {
     case 'EBK':
       return '#FFA500'; // Orange
     case 'No Beef':
-      return '#0000FF'; // Blue
+      return '#808080'; // Gray
     default:
-      return '#FFFFFF'; // White
+      return '#0099ff'; // Default blue
   }
 }
 
@@ -533,7 +550,8 @@ client.on('interactionCreate', async interaction => {
   // Check if this is an activity add button
   if (interaction.customId.startsWith('add_')) {
     try {
-      const type = interaction.customId.substring(4); // Get the activity type from the button ID
+      const typeCode = interaction.customId.substring(4); // Get the activity type code from the button ID
+      const type = TYPE_CODES[typeCode] || typeCode; // Convert to full type name or use as is
       
       // Load gangs for the select menu
       const gangs = await loadGangs();
@@ -547,7 +565,7 @@ client.on('interactionCreate', async interaction => {
       
       // Create a modal for searching gangs
       const modal = new ModalBuilder()
-        .setCustomId(`search_gangs_${type}`)
+        .setCustomId(`search_gangs_${typeCode}`) // Use shorter code in the ID
         .setTitle(`Search for a Gang - ${type}`);
       
       // Create gang search input
@@ -586,12 +604,13 @@ client.on('interactionCreate', async interaction => {
   // Handle gang selection
   if (interaction.customId.startsWith('select_gang_')) {
     try {
-      const type = interaction.customId.substring('select_gang_'.length);
+      const typeCode = interaction.customId.substring('select_gang_'.length);
+      const type = TYPE_CODES[typeCode] || typeCode; // Convert to full type name
       const gangName = interaction.values[0]; // Get the selected gang
       
       // Create a modal for description
       const modal = new ModalBuilder()
-        .setCustomId(`activity_modal_${type}_${gangName}`) // Include gang name in the ID
+        .setCustomId(`activity_modal_${typeCode}_${gangName}`) // Use type code in ID
         .setTitle(`Add ${type} Activity for ${gangName}`);
       
       // Create description input
@@ -709,10 +728,11 @@ client.on('interactionCreate', async interaction => {
     return;
   }
   
-  // Handle gang search submission (keeping in case we need it later)
+  // Handle gang search submission
   if (interaction.customId.startsWith('search_gangs_')) {
     try {
-      const type = interaction.customId.substring('search_gangs_'.length);
+      const typeCode = interaction.customId.substring('search_gangs_'.length);
+      const type = TYPE_CODES[typeCode] || typeCode; // Convert to full type name
       const searchQuery = interaction.fields.getTextInputValue('gang_search').toLowerCase();
       
       // Load all gangs
@@ -738,7 +758,7 @@ client.on('interactionCreate', async interaction => {
       const selectMenu = new ActionRowBuilder()
         .addComponents(
           new StringSelectMenuBuilder()
-            .setCustomId(`select_gang_${type}`)
+            .setCustomId(`select_gang_${typeCode}`) // Use type code in ID
             .setPlaceholder('Select a gang')
             .addOptions(
               filteredGangs.map(gang => ({
@@ -771,9 +791,10 @@ client.on('interactionCreate', async interaction => {
   // Handle activity form submission
   if (interaction.customId.startsWith('activity_modal_')) {
     try {
-      // Extract type and gang name from the modal ID
+      // Extract type code and gang name from the modal ID
       const parts = interaction.customId.substring('activity_modal_'.length).split('_');
-      const type = parts[0];
+      const typeCode = parts[0];
+      const type = TYPE_CODES[typeCode] || typeCode; // Convert to full type name
       const gangName = parts.slice(1).join('_'); // In case the gang name contains underscores
       
       // Get the description from the form
@@ -940,19 +961,19 @@ client.on('interactionCreate', async interaction => {
       const row = new ActionRowBuilder()
         .addComponents(
           new ButtonBuilder()
-            .setCustomId('add_Our Turn (Giliran Kita)')
+            .setCustomId('add_our_turn')
             .setLabel('Our Turn (Giliran Kita)')
             .setStyle(ButtonStyle.Success),
           new ButtonBuilder()
-            .setCustomId('add_Opps Turn (Giliran Mereka)')
+            .setCustomId('add_opps_turn')
             .setLabel('Opps Turn (Giliran Mereka)')
             .setStyle(ButtonStyle.Danger),
           new ButtonBuilder()
-            .setCustomId('add_EBK')
+            .setCustomId('add_ebk')
             .setLabel('EBK')
             .setStyle(ButtonStyle.Primary),
           new ButtonBuilder()
-            .setCustomId('add_No Beef')
+            .setCustomId('add_no_beef')
             .setLabel('No Beef')
             .setStyle(ButtonStyle.Secondary)
         );
