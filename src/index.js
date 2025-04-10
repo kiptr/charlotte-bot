@@ -1363,7 +1363,7 @@ client.on('interactionCreate', async interaction => {
       
       // Send the stream notification
       await streamChannel.send({
-        content: `Hey @everyone, check out **${interaction.user.username}'s** stream!`,
+        content: `**${interaction.user.username}** is now streaming on YouTube! ${streamLink}`,
         embeds: [embed]
       });
       
@@ -1445,7 +1445,7 @@ client.on('presenceUpdate', async (oldPresence, newPresence) => {
       
       // Send the stream notification
       await streamChannel.send({
-        content: `Hey @everyone, **${userName}** is now streaming on YouTube! ${streamUrl}`,
+        content: `**${userName}** is now streaming on YouTube! ${streamUrl}`,
         embeds: [embed]
       });
       
